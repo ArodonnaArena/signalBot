@@ -9,6 +9,14 @@
       "destination": "/api/health"
     },
     {
+      "source": "/admin/signals",
+      "destination": "/api/signal-form"
+    },
+    {
+      "source": "/api/admin-signals",
+      "destination": "/api/admin-signals"
+    },
+    {
       "source": "/",
       "destination": "/api/index"
     }
