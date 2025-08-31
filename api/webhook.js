@@ -190,22 +190,24 @@ bot.catch((err, ctx) => {
 // Vercel serverless function handler
 module.exports = async (req, res) => {
   try {
-    if (req.method === 'POST' && req.url === '/webhook') {
+    if (req.method === 'POST') {
       // Handle Telegram webhook
-      await bot.handleUpdate(req.body, res);
+      console.log('Webhook received:', req.body);
+      await bot.handleUpdate(req.body);
       res.status(200).json({ ok: true });
-    } else if (req.method === 'GET' && req.url === '/health') {
+    } else if (req.method === 'GET') {
       // Health check
       res.status(200).json({ 
         status: 'OK', 
         timestamp: new Date().toISOString(),
-        bot: 'ArodonnaSignals'
+        bot: 'ArodonnaSignals',
+        webhook_url: 'https://signal-bot-lyart.vercel.app/webhook'
       });
     } else {
-      res.status(404).json({ error: 'Not found' });
+      res.status(405).json({ error: 'Method not allowed' });
     }
   } catch (error) {
     console.error('Webhook error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 };
