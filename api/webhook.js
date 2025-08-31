@@ -1,44 +1,24 @@
 // Vercel serverless function for webhook
-require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
-const mysql = require('mysql2/promise');
+import { Telegraf, Markup } from 'telegraf';
 
 // Initialize bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// MySQL connection for Vercel (using connection per request)
-async function getDBConnection() {
-  return await mysql.createConnection({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT || 3306,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-  });
-}
+// Simple user tracking (without database for now)
+const users = new Map();
 
-// Simple database helpers for Vercel
 async function upsertUser(userInfo) {
-  const connection = await getDBConnection();
-  try {
-    const { id, username, first_name, last_name } = userInfo;
-    const display_name = [first_name, last_name].filter(Boolean).join(' ');
-    
-    await connection.execute(
-      `INSERT INTO users (telegram_id, username, display_name, updated_at)
-       VALUES (?, ?, ?, NOW())
-       ON DUPLICATE KEY UPDATE
-       username = VALUES(username),
-       display_name = VALUES(display_name),
-       updated_at = NOW()`,
-      [id, username, display_name]
-    );
-    
-    const [users] = await connection.execute('SELECT * FROM users WHERE telegram_id = ?', [id]);
-    return users[0];
-  } finally {
-    await connection.end();
-  }
+  const { id, username, first_name, last_name } = userInfo;
+  const display_name = [first_name, last_name].filter(Boolean).join(' ');
+  
+  users.set(id, {
+    telegram_id: id,
+    username,
+    display_name,
+    created_at: new Date().toISOString()
+  });
+  
+  return users.get(id);
 }
 
 // Bot commands
@@ -188,7 +168,7 @@ bot.catch((err, ctx) => {
 });
 
 // Vercel serverless function handler
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   try {
     if (req.method === 'POST') {
       // Handle Telegram webhook
@@ -200,8 +180,9 @@ module.exports = async (req, res) => {
       res.status(200).json({ 
         status: 'OK', 
         timestamp: new Date().toISOString(),
-        bot: 'ArodonnaSignals',
-        webhook_url: 'https://signal-bot-lyart.vercel.app/webhook'
+        bot: '@ArodonnaSignalsBot',
+        webhook_url: 'https://signal-bot-lyart.vercel.app/webhook',
+        environment: 'vercel'
       });
     } else {
       res.status(405).json({ error: 'Method not allowed' });
@@ -210,4 +191,4 @@ module.exports = async (req, res) => {
     console.error('Webhook error:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
-};
+}

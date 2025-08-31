@@ -1,5 +1,5 @@
 // Vercel serverless function for root route
-module.exports = async (req, res) => {
+export default function handler(req, res) {
   res.status(200).json({
     name: "ArodonnaSignals Bot",
     description: "Telegram bot for crypto trading signals",
@@ -16,4 +16,4 @@ module.exports = async (req, res) => {
     ],
     timestamp: new Date().toISOString()
   });
-};
+}
