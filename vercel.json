@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "src/webhook.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/webhook",
+      "dest": "src/webhook.js"
+    },
+    {
+      "src": "/admin/(.*)",
+      "dest": "src/webhook.js"
+    },
+    {
+      "src": "/health",
+      "dest": "src/webhook.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "src/webhook.js"
+    }
+  ],
+  "env": {
+    "BOT_TOKEN": "@bot_token",
+    "DB_HOST": "@db_host",
+    "DB_PORT": "@db_port", 
+    "DB_USER": "@db_user",
+    "DB_PASSWORD": "@db_password",
+    "DB_NAME": "@db_name",
+    "TELEGRAM_PROVIDER_TOKEN": "@telegram_provider_token",
+    "PREMIUM_CHANNEL_ID": "@premium_channel_id",
+    "PREMIUM_CHANNEL_INVITE_LINK": "@premium_channel_invite_link",
+    "BOT_USERNAME": "@bot_username",
+    "ADMIN_TOKEN": "@admin_token"
+  }
+}
