@@ -1,4 +1,9 @@
+// db.js - runtime wrapper. Supports Mongo, SQLite or MySQL/Postgres-style SQL implementations.
 require('dotenv').config();
+const useMongo = process.env.USE_MONGO_DB && (process.env.USE_MONGO_DB === '1' || process.env.USE_MONGO_DB.toLowerCase() === 'true');
+if (useMongo) {
+  module.exports = require('./db-mongo');
+} else {
 const { Pool } = require('pg');
 
 // Database connection pool
@@ -542,3 +547,4 @@ module.exports = {
   getRevenueStats,
   getPremiumInviteLink
 };
+}

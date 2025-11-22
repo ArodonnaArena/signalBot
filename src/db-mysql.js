@@ -131,6 +131,20 @@ async function createTables() {
       INDEX idx_product_id (product_id),
       INDEX idx_created_at (created_at)
     )`
+    ,
+    // Signal delivery logs (records when Telegram send succeeded but DB update failed or other delivery issues)
+    `CREATE TABLE IF NOT EXISTS telegram_signal_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      signal_id VARCHAR(255) NULL,
+      telegram_message_id BIGINT NULL,
+      channel_id VARCHAR(255) NULL,
+      error_message TEXT NULL,
+      metadata JSON NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_signal_id (signal_id),
+      INDEX idx_channel_id (channel_id),
+      INDEX idx_created_at (created_at)
+    )`
   ];
   
   for (const query of queries) {
@@ -154,6 +168,19 @@ async function query(sql, params = []) {
   } catch (error) {
     console.error('Database query error:', { sql, params, error: error.message });
     throw error;
+  }
+}
+
+// Log a signal delivery failure or fallback record
+async function logSignalDeliveryFailure({ signalId = null, telegramMessageId = null, channelId = null, errorMessage = null, metadata = null } = {}) {
+  try {
+    await query(
+      `INSERT INTO telegram_signal_logs (signal_id, telegram_message_id, channel_id, error_message, metadata)
+       VALUES (?, ?, ?, ?, ?)`,
+      [signalId ? String(signalId) : null, telegramMessageId || null, channelId ? String(channelId) : null, errorMessage || null, metadata ? JSON.stringify(metadata) : null]
+    );
+  } catch (err) {
+    console.error('Failed to write telegram_signal_logs entry:', err);
   }
 }
 
@@ -420,4 +447,7 @@ module.exports = {
   getSubscriptionStats,
   getRevenueStats,
   getPremiumInviteLink
+  ,
+  // Signal delivery logging
+  logSignalDeliveryFailure
 };

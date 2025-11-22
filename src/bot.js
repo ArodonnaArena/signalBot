@@ -1,8 +1,9 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const { createInvoicePayload } = require('./payments');
-const db = require('./db-mysql');
+const db = require('./db');
 const { generateReferralCode, generateReferralLink } = require('./referrals');
+const { startSignalConsumer } = require('./signalConsumer');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -389,13 +390,19 @@ module.exports = bot;
 
 // Start bot if running directly
 if (require.main === module) {
-  bot.launch().then(() => {
-    console.log('Bot started successfully');
-  }).catch((error) => {
-    console.error('Failed to start bot:', error);
-    process.exit(1);
-  });
-  
+  (async () => {
+    try {
+      // Start signal consumer first (no-op if not configured)
+      await startSignalConsumer(bot);
+
+      await bot.launch();
+      console.log('Bot started successfully');
+    } catch (error) {
+      console.error('Failed to start bot or signal consumer:', error);
+      process.exit(1);
+    }
+  })();
+
   // Enable graceful stop
   process.once('SIGINT', () => bot.stop('SIGINT'));
   process.once('SIGTERM', () => bot.stop('SIGTERM'));

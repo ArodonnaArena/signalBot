@@ -95,6 +95,15 @@ ADMIN_TOKEN=your_secure_admin_token
 ADMIN_TELEGRAM_ID=your_telegram_user_id
 ```
 
+If you use the AI signal integration (signal_bot), also set the MongoDB connection variables below:
+
+```env
+MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DB_NAME=signal_bot_db
+SIGNALS_COLLECTION=ai_signals
+SIGNAL_POLL_INTERVAL_MS=60000
+```
+
 ## Bot Commands
 
 ### User Commands
