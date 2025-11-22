@@ -25,7 +25,8 @@ const { MongoClient } = require('mongodb');
       { name: 'app_users' },
       { name: 'app_subscriptions' },
       { name: 'app_referrals' },
-      { name: 'telegram_signal_logs' }
+      { name: 'telegram_signal_logs' },
+      { name: 'signal_publish_log' }
     ];
 
     for (const c of collections) {
@@ -44,6 +45,20 @@ const { MongoClient } = require('mongodb');
     await db.collection('app_subscriptions').createIndex({ status: 1, expires_at: 1 });
     await db.collection('app_referrals').createIndex({ referrer_telegram_id: 1 });
     await db.collection('telegram_signal_logs').createIndex({ signal_id: 1 });
+    // _id is already unique by default; no explicit unique index required
+
+    // Seed publish log entries if missing
+    const seed = [
+      { _id: 'free', last_published: null },
+      { _id: 'premium', last_published: null }
+    ];
+    for (const s of seed) {
+      const exists = await db.collection('signal_publish_log').findOne({ _id: s._id });
+      if (!exists) {
+        console.log(`Seeding publish log entry: ${s._id}`);
+        await db.collection('signal_publish_log').insertOne(s);
+      }
+    }
 
     console.log(`App collections and indexes initialized in database: ${dbName}`);
   } catch (err) {

@@ -45,6 +45,15 @@ async function fetchPendingSignals(signalsCol, { limit = 10 } = {}) {
   return cursor.toArray();
 }
 
+async function getPublishLog(col, type) {
+  const doc = await col.findOne({ _id: type });
+  return doc ? doc.last_published : null;
+}
+
+async function setPublishLog(col, type, when) {
+  await col.updateOne({ _id: type }, { $set: { last_published: when } }, { upsert: true });
+}
+
 async function updateSignalDocumentWithRetry(signalsCol, filter, update, maxRetries = 3) {
   let attempt = 0;
   let backoff = 1000;
@@ -66,7 +75,10 @@ async function updateSignalDocumentWithRetry(signalsCol, filter, update, maxRetr
 const failedUpdateCache = new Set();
 
 async function sendSignalToPremium(bot, signalsCol, sig) {
-  const chatId = process.env.PREMIUM_CHANNEL_ID;
+  // decide destination channel based on whether signal is premium
+  const premiumChatId = process.env.PREMIUM_CHANNEL_ID;
+  const freeChatId = process.env.FREE_CHANNEL_ID || process.env.PREMIUM_CHANNEL_ID;
+  const chatId = sig.is_premium ? premiumChatId : freeChatId;
   if (!chatId) throw new Error('PREMIUM_CHANNEL_ID not set');
 
   const text = formatSignalMessage(sig);
@@ -92,6 +104,14 @@ async function sendSignalToPremium(bot, signalsCol, sig) {
       },
       $addToSet: { sent_channels: String(chatId) }
     }, 3);
+    // Update publish log for type
+    try {
+      const publishCol = signalsCol.db.collection('signal_publish_log');
+      const type = sig.is_premium ? 'premium' : 'free';
+      await setPublishLog(publishCol, type, now);
+    } catch (e) {
+      console.error('[SignalConsumer] Failed to update publish_log:', e && e.message ? e.message : e);
+    }
   } catch (err) {
     // If Mongo update ultimately fails, log to SQL for manual reconciliation and avoid re-sending during this process lifetime
     const sigId = sig.id !== undefined ? sig.id : (sig._id ? String(sig._id) : null);
@@ -135,11 +155,39 @@ async function startSignalConsumer(bot) {
     if (!running) return;
     try {
       const signals = await fetchPendingSignals(signalsCol, { limit: 10 });
+      const publishCol = db.collection('signal_publish_log');
+      const now = new Date();
       for (const sig of signals) {
         try {
           // basic validation
           if (!sig.entry_price && !sig.entry) {
             console.warn('[SignalConsumer] Skipping signal without entry:', sig.id || sig._id);
+            continue;
+          }
+
+          // Enforce publish windows
+          const type = sig.is_premium ? 'premium' : 'free';
+          const last = await getPublishLog(publishCol, type);
+          let allowed = true;
+          if (last) {
+            const lastDate = new Date(last);
+            if (type === 'premium') {
+              // allow once per 24 hours
+              allowed = (now - lastDate) >= (24 * 3600 * 1000);
+            } else {
+              // free: allow once per 7 days
+              allowed = (now - lastDate) >= (7 * 24 * 3600 * 1000);
+            }
+          }
+
+          if (!allowed) {
+            console.log(`[SignalConsumer] Skipping ${type} signal ${sig.id || sig._id} — publish window not yet elapsed`);
+            // mark as deferred so it can be re-evaluated later (optional)
+            try {
+              await signalsCol.updateOne({ _id: sig._id }, { $set: { status: 'deferred', deferred_at: now } });
+            } catch (e) {
+              // ignore logging failure
+            }
             continue;
           }
 
