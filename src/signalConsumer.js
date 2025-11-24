@@ -157,7 +157,17 @@ async function startSignalConsumer(bot) {
       const signals = await fetchPendingSignals(signalsCol, { limit: 10 });
       const publishCol = db.collection('signal_publish_log');
       const now = new Date();
-      for (const sig of signals) {
+      for (const sigRaw of signals) {
+        // Attempt to atomically claim the signal to avoid races with other runners
+        const now = new Date();
+        const claimFilter = { _id: sigRaw._id, status: 'pending' };
+        const claimUpdate = { $set: { status: 'sending', claimed_at: now } };
+        const claimRes = await signalsCol.findOneAndUpdate(claimFilter, claimUpdate, { returnDocument: 'after' });
+        if (!claimRes.value) {
+          // someone else claimed or status changed
+          continue;
+        }
+        const sig = claimRes.value;
         try {
           // basic validation
           if (!sig.entry_price && !sig.entry) {
@@ -181,12 +191,12 @@ async function startSignalConsumer(bot) {
           }
 
           if (!allowed) {
-            console.log(`[SignalConsumer] Skipping ${type} signal ${sig.id || sig._id} — publish window not yet elapsed`);
-            // mark as deferred so it can be re-evaluated later (optional)
+            console.log(`[SignalConsumer] Deferring ${type} signal ${sig.id || sig._id} — publish window not yet elapsed`);
+            // mark as deferred so it can be re-evaluated later
             try {
-              await signalsCol.updateOne({ _id: sig._id }, { $set: { status: 'deferred', deferred_at: now } });
+              await signalsCol.updateOne({ _id: sig._id, status: 'sending' }, { $set: { status: 'deferred', deferred_at: now } });
             } catch (e) {
-              // ignore logging failure
+              console.error('[SignalConsumer] Failed to mark deferred:', e && e.message ? e.message : e);
             }
             continue;
           }

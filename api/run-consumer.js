@@ -37,7 +37,15 @@ export default async function handler(req, res) {
 
     const results = [];
 
-    for (const sig of pending) {
+    for (const sigRaw of pending) {
+      // atomically claim the signal
+      const claimFilter = { _id: sigRaw._id, status: 'pending' };
+      const claimedAt = new Date();
+      const claimRes = await signalsCol.findOneAndUpdate(claimFilter, { $set: { status: 'sending', claimed_at: claimedAt } }, { returnDocument: 'after' });
+      if (!claimRes.value) continue; // someone else claimed
+      const sig = claimRes.value;
+
+      try {
       try {
         if (!sig.entry_price && !sig.entry) {
           results.push({ id: sig._id, status: 'skipped', reason: 'no entry' });
@@ -55,8 +63,8 @@ export default async function handler(req, res) {
         }
 
         if (!allowed) {
-          // defer
-          await signalsCol.updateOne({ _id: sig._id }, { $set: { status: 'deferred', deferred_at: now } });
+          // defer only if we still have claimed status
+          await signalsCol.updateOne({ _id: sig._id, status: 'sending' }, { $set: { status: 'deferred', deferred_at: now } });
           results.push({ id: sig._id, status: 'deferred', reason: 'publish window not elapsed' });
           continue;
         }
