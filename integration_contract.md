@@ -141,6 +141,11 @@ const signalsCol = mongoDb.collection(process.env.SIGNALS_COLLECTION || 'ai_sign
 
 ## 4. Telegram Bot Responsibilities
 
+In addition to trade signals, `signal_bot` can optionally produce **news
+updates** in a separate MongoDB collection (`news_updates`) so the
+Telegram channel can stay active even when there are no new trades. See
+section 4.4 for details.
+
 ### 4.1 High-Level Workflow
 
 1. Connect to MongoDB Atlas using `MONGODB_URI` and `MONGODB_DB_NAME`.
@@ -206,44 +211,99 @@ Example formatter (Telegram MarkdownV2 or HTML):
 ```js
 function formatSignalMessage(sig) {
   const direction = sig.signal_type === 'LONG' ? 'BUY (LONG)' : 'SELL (SHORT)';
-  const market = sig.market_type.toUpperCase();
+  const market = (sig.market_type || 'crypto').toUpperCase();
 
-  const baseLines = [
-    `
+  const header = `🔔 *NEW ${market} SIGNAL*`;
 
-🔔 *NEW ${market} SIGNAL*`,
+  const core = [
     `*Pair:* ${sig.pair}`,
     `*Direction:* ${direction}`,
     `*Entry:* ${sig.entry_price}`,
     `*Stop Loss:* ${sig.stop_loss}`,
     `*Take Profit:* ${sig.take_profit}`,
     `*Confidence:* ${sig.confidence_level}%`,
-    `*Risk–Reward:* ${sig.risk_reward_ratio.toFixed(2)} : 1`,
-  ];
+    sig.risk_reward_ratio != null ? `*Risk–Reward:* ${sig.risk_reward_ratio.toFixed(2)} : 1` : null,
+  ].filter(Boolean);
+
+  const diagnostics = [];
+
+  if (typeof sig.technical_score === 'number' || typeof sig.ml_score === 'number' || typeof sig.sentiment_score === 'number') {
+    const tech = typeof sig.technical_score === 'number' ? sig.technical_score.toFixed(1) : 'N/A';
+    const ml = typeof sig.ml_score === 'number' ? sig.ml_score.toFixed(1) : 'N/A';
+    const sent = typeof sig.sentiment_score === 'number' ? sig.sentiment_score.toFixed(1) : 'N/A';
+    diagnostics.push(`*Scores:* tech=${tech}, ml=${ml}, sentiment=${sent}`);
+  }
 
   if (sig.reasoning) {
-    baseLines.push('', `*Reasoning:* ${sig.reasoning}`);
+    diagnostics.push(`*Reasoning:* ${sig.reasoning}`);
   }
 
   if (Array.isArray(sig.validation_warnings) && sig.validation_warnings.length > 0) {
-    baseLines.push('', '*Warnings:*');
+    diagnostics.push('*Warnings:*');
     for (const w of sig.validation_warnings) {
-      baseLines.push(`• ${w}`);
+      diagnostics.push(`• ${w}`);
     }
   }
 
-  baseLines.push(
-    '',
-    '_Not financial advice. Trade at your own risk._'
-  );
+  const disclaimer = '_Not financial advice. Trade at your own risk._';
 
-  return baseLines.join('\n');
+  return [header, '', ...core, '', ...diagnostics, '', disclaimer].join('\n');
 }
 ```
 
 The Telegram bot may adapt styling but **must** preserve the core numeric fields and include a disclaimer.
 
-### 4.4 Destination Rules
+### 4.4 News Updates (optional)
+
+`signal_bot` periodically writes compact news items to the collection
+`signal_bot_db.news_updates` with the following shape:
+
+```jsonc
+{
+  "_id": ObjectId,
+  "symbol": "BTC" | "ETH" | "EURUSD" | ...,        // underlying asset
+  "title": "Bitcoin breaks above $70k",
+  "summary": "BTC rallies as ETF inflows accelerate...",
+  "url": "https://example.com/article",
+  "source": "CoinDesk",
+  "provider": "newsapi" | "finnhub",
+  "published_at": ISODate,                         // from provider
+  "created_at": ISODate                            // when stored
+}
+```
+
+The Telegram consumer **may** poll this collection (for example every
+30–60 minutes) and post one or two fresh items to the premium channel to
+keep users engaged and to showcase connected APIs (NewsAPI, Finnhub,
+etc.). A simple consumer pattern:
+
+```js
+async function fetchRecentNews(mongoDb, { limit = 5 } = {}) {
+  const col = mongoDb.collection('news_updates');
+  const cursor = col.find({}).sort({ created_at: -1 }).limit(limit);
+  return cursor.toArray();
+}
+
+function formatNewsMessage(item) {
+  const src = item.source || item.provider || 'News';
+  return [
+    `📰 *${item.symbol} Market News*`,
+    `*Source:* ${src}`,
+    `*Headline:* ${item.title}`,
+    '',
+    item.summary || '',
+    '',
+    item.url ? `[Read more](${item.url})` : '',
+    '',
+    '_Not financial advice. Informational only._',
+  ].filter(Boolean).join('\n');
+}
+```
+
+Destination rules for news messages are the same as for trade signals –
+usually the `PREMIUM_CHANNEL_ID`.
+
+### 4.5 Destination Rules
 
 By default, signals are sent to:
 

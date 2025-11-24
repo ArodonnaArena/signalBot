@@ -24,6 +24,20 @@ function formatSignalMessage(sig) {
     lines.push('', `*Reasoning:* ${escapeMarkdown(sig.reasoning)}`);
   }
 
+  // Include generation and expiry timestamps to help traceability
+  if (sig.generated_at) {
+    try {
+      const g = new Date(sig.generated_at).toLocaleString();
+      lines.push('', `*Generated:* ${escapeMarkdown(g)}`);
+    } catch (e) {}
+  }
+  if (sig.expires_at) {
+    try {
+      const x = new Date(sig.expires_at).toLocaleString();
+      lines.push(`*Expires:* ${escapeMarkdown(x)}`);
+    } catch (e) {}
+  }
+
   if (Array.isArray(sig.validation_warnings) && sig.validation_warnings.length > 0) {
     lines.push('', '*Warnings:*');
     for (const w of sig.validation_warnings) lines.push(`• ${escapeMarkdown(w)}`);
@@ -31,6 +45,28 @@ function formatSignalMessage(sig) {
 
   lines.push('', '_Not financial advice. Trade at your own risk._');
 
+  return lines.join('\n');
+}
+
+function formatNewsMessage(item) {
+  // Format a news item for Telegram posting
+  const lines = [];
+  lines.push(`📰 *${escapeMarkdown(item.title || 'News Update')}`);
+  if (item.summary) {
+    lines.push(`${escapeMarkdown(item.summary)}`);
+  }
+  if (item.source || item.provider) {
+    lines.push('', `*Source:* ${escapeMarkdown(item.source || item.provider)}`);
+  }
+  if (item.url) {
+    lines.push(`[Read more](${escapeMarkdown(item.url)})`);
+  }
+  if (item.created_at) {
+    try {
+      const c = new Date(item.created_at).toLocaleString();
+      lines.push('', `_${escapeMarkdown(c)}_`);
+    } catch (e) {}
+  }
   return lines.join('\n');
 }
 
@@ -151,11 +187,76 @@ async function startSignalConsumer(bot) {
 
   let running = true;
 
+  async function sendNewsToPremium(newsItem) {
+    // Post a news item to the premium channel
+    try {
+      const channelId = process.env.PREMIUM_CHANNEL_ID;
+      if (!channelId) {
+        console.warn('[SignalConsumer] PREMIUM_CHANNEL_ID not set, skipping news');
+        return;
+      }
+      const text = formatNewsMessage(newsItem);
+      await bot.telegram.sendMessage(channelId, text, { parse_mode: 'Markdown' });
+      console.log('[SignalConsumer] Posted news to premium channel:', newsItem._id || newsItem.id);
+    } catch (err) {
+      console.error('[SignalConsumer] Failed to send news:', err);
+      throw err;
+    }
+  }
+
+  async function publishNewsIfReady(newsCol, publishCol) {
+    // Check if we should publish a news item
+    try {
+      const newsIntervalMin = parseInt(process.env.NEWS_PUBLISH_INTERVAL_MINUTES || '60', 10);
+      const now = new Date();
+      const last = await getPublishLog(publishCol, 'news');
+      let allowed = true;
+      if (last) {
+        const lastDate = new Date(last);
+        allowed = (now - lastDate) >= (newsIntervalMin * 60 * 1000);
+      }
+
+      if (!allowed) {
+        return; // too soon
+      }
+
+      // Find an unpublished news item
+      const newsItem = await newsCol.findOne({ status: { $in: ['pending', null] }, expires_at: { $gt: now } }, { sort: { created_at: -1 } });
+      if (!newsItem) {
+        return; // no news available
+      }
+
+      // Atomically claim it
+      const claimRes = await newsCol.findOneAndUpdate(
+        { _id: newsItem._id, status: { $in: ['pending', null] } },
+        { $set: { status: 'sending', claimed_at: now } },
+        { returnDocument: 'after' }
+      );
+      if (!claimRes.value) return; // someone else claimed it
+
+      try {
+        await sendNewsToPremium(claimRes.value);
+        // Mark as published
+        await newsCol.updateOne({ _id: newsItem._id }, { $set: { status: 'published', published_at: now } });
+        // Update publish log
+        await publishCol.updateOne({ _id: 'news' }, { $set: { last_published: now } }, { upsert: true });
+        console.log('[SignalConsumer] News published and logged:', newsItem._id);
+      } catch (err) {
+        // Mark as failed to send, revert status
+        await newsCol.updateOne({ _id: newsItem._id, status: 'sending' }, { $set: { status: 'pending', failed_at: now } });
+        throw err;
+      }
+    } catch (err) {
+      console.error('[SignalConsumer] Error in publishNewsIfReady:', err);
+    }
+  }
+
   async function tick() {
     if (!running) return;
     try {
       const signals = await fetchPendingSignals(signalsCol, { limit: 10 });
       const publishCol = db.collection('signal_publish_log');
+      const newsCol = db.collection('news_updates');
       const now = new Date();
       for (const sigRaw of signals) {
         // Attempt to atomically claim the signal to avoid races with other runners
@@ -207,6 +308,9 @@ async function startSignalConsumer(bot) {
           console.error('[SignalConsumer] Error sending signal', sig.id || sig._id, err);
         }
       }
+
+      // Also try to publish a news item if ready
+      await publishNewsIfReady(newsCol, publishCol);
     } catch (err) {
       console.error('[SignalConsumer] Tick error:', err);
     } finally {

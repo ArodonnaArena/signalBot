@@ -50,7 +50,8 @@ const { MongoClient } = require('mongodb');
     // Seed publish log entries if missing
     const seed = [
       { _id: 'free', last_published: null },
-      { _id: 'premium', last_published: null }
+      { _id: 'premium', last_published: null },
+      { _id: 'news', last_published: null }
     ];
     for (const s of seed) {
       const exists = await db.collection('signal_publish_log').findOne({ _id: s._id });

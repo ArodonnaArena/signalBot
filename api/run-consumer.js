@@ -1,6 +1,33 @@
 import { Telegraf } from 'telegraf';
 import { MongoClient, ObjectId } from 'mongodb';
 
+function escapeMarkdown(text = '') {
+  // minimal escaping for Markdown
+  return String(text).replace(/([_\*\[\]\(\)~`>#+\-=|{}.!])/g, '\\$1');
+}
+
+function formatNewsMessage(item) {
+  // Format a news item for Telegram posting
+  const lines = [];
+  lines.push(`📰 *${escapeMarkdown(item.title || 'News Update')}`);
+  if (item.summary) {
+    lines.push(`${escapeMarkdown(item.summary)}`);
+  }
+  if (item.source || item.provider) {
+    lines.push('', `*Source:* ${escapeMarkdown(item.source || item.provider)}`);
+  }
+  if (item.url) {
+    lines.push(`[Read more](${escapeMarkdown(item.url)})`);
+  }
+  if (item.created_at) {
+    try {
+      const c = new Date(item.created_at).toLocaleString();
+      lines.push('', `_${escapeMarkdown(c)}_`);
+    } catch (e) {}
+  }
+  return lines.join('\n');
+}
+
 // Single-tick consumer endpoint for Vercel (or any serverless environment).
 // Protect with ADMIN_TOKEN header: set `ADMIN_TOKEN` in env and call with header `x-admin-token: <token>`
 
@@ -29,10 +56,11 @@ export default async function handler(req, res) {
     const db = client.db(dbName);
     const signalsCol = db.collection(collName);
     const publishCol = db.collection('signal_publish_log');
+    const newsCol = db.collection('news_updates');
 
     const now = new Date();
 
-    // fetch a small batch
+    // fetch a small batch of signals
     const pending = await signalsCol.find({ status: 'pending', is_premium: { $ne: false }, expires_at: { $gt: now } }).sort({ generated_at: 1 }).limit(20).toArray();
 
     const results = [];
@@ -45,7 +73,6 @@ export default async function handler(req, res) {
       if (!claimRes.value) continue; // someone else claimed
       const sig = claimRes.value;
 
-      try {
       try {
         if (!sig.entry_price && !sig.entry) {
           results.push({ id: sig._id, status: 'skipped', reason: 'no entry' });
@@ -75,17 +102,28 @@ export default async function handler(req, res) {
           continue;
         }
 
-        const textLines = [];
         const market = (sig.market_type || '').toUpperCase() || 'MARKET';
-        textLines.push(`🔔 *NEW ${market} SIGNAL*`);
-        textLines.push(`*Pair:* ${sig.pair || 'N/A'}`);
-        textLines.push(`*Direction:* ${sig.signal_type || 'N/A'}`);
-        textLines.push(`*Entry:* ${sig.entry_price || sig.entry || 'N/A'}`);
-        textLines.push(`*Stop Loss:* ${sig.stop_loss || sig.stop || 'N/A'}`);
-        textLines.push(`*Take Profit:* ${sig.take_profit || sig.take || 'N/A'}`);
-        if (sig.confidence_level !== undefined) textLines.push(`*Confidence:* ${sig.confidence_level}%`);
-        if (sig.risk_reward_ratio !== undefined) textLines.push(`*Risk–Reward:* ${Number(sig.risk_reward_ratio).toFixed(2)} : 1`);
-        if (sig.reasoning) textLines.push('', `*Reasoning:* ${sig.reasoning}`);
+        const direction = sig.signal_type === 'LONG' ? 'BUY (LONG)' : sig.signal_type === 'SHORT' ? 'SELL (SHORT)' : sig.signal_type || 'HOLD';
+
+        const textLines = [];
+        textLines.push(`🔔 *NEW ${escapeMarkdown(market)} SIGNAL*`);
+        textLines.push(`*Pair:* ${escapeMarkdown(sig.pair || 'N/A')}`);
+        textLines.push(`*Direction:* ${escapeMarkdown(direction)}`);
+        textLines.push(`*Entry:* ${escapeMarkdown(String(sig.entry_price || sig.entry || 'N/A'))}`);
+        textLines.push(`*Stop Loss:* ${escapeMarkdown(String(sig.stop_loss || sig.stop || 'N/A'))}`);
+        textLines.push(`*Take Profit:* ${escapeMarkdown(String(sig.take_profit || sig.take || 'N/A'))}`);
+        if (sig.confidence_level !== undefined) textLines.push(`*Confidence:* ${escapeMarkdown(String(sig.confidence_level))}%`);
+        if (sig.risk_reward_ratio !== undefined) textLines.push(`*Risk–Reward:* ${escapeMarkdown(String(Number(sig.risk_reward_ratio).toFixed(2)))} : 1`);
+        if (sig.reasoning) textLines.push('', `*Reasoning:* ${escapeMarkdown(sig.reasoning)}`);
+
+        // Include generated/expires timestamps for transparency
+        if (sig.generated_at) {
+          try { textLines.push('', `*Generated:* ${escapeMarkdown(new Date(sig.generated_at).toLocaleString())}`); } catch(e){}
+        }
+        if (sig.expires_at) {
+          try { textLines.push(`*Expires:* ${escapeMarkdown(new Date(sig.expires_at).toLocaleString())}`); } catch(e){}
+        }
+
         textLines.push('', '_Not financial advice. Trade at your own risk._');
 
         const text = textLines.join('\n');
@@ -100,6 +138,61 @@ export default async function handler(req, res) {
         console.error('run-consumer error for signal', sig._id, err && err.message ? err.message : err);
         results.push({ id: sig._id, status: 'error', error: err && err.message ? err.message : String(err) });
       }
+    }
+
+    // Also try to publish a news item if ready
+    try {
+      const newsIntervalMin = parseInt(process.env.NEWS_PUBLISH_INTERVAL_MINUTES || '60', 10);
+      const newsPublishDoc = await publishCol.findOne({ _id: 'news' });
+      const lastNewsPublish = newsPublishDoc && newsPublishDoc.last_published ? new Date(newsPublishDoc.last_published) : null;
+      
+      let newsAllowed = true;
+      if (lastNewsPublish) {
+        newsAllowed = (now - lastNewsPublish) >= (newsIntervalMin * 60 * 1000);
+      }
+
+      if (newsAllowed) {
+        // Find an unpublished news item that hasn't expired
+        const newsItem = await newsCol.findOne(
+          { status: { $in: ['pending', null] }, expires_at: { $gt: now } },
+          { sort: { created_at: -1 } }
+        );
+
+        if (newsItem) {
+          // Atomically claim it
+          const newsClaimRes = await newsCol.findOneAndUpdate(
+            { _id: newsItem._id, status: { $in: ['pending', null] } },
+            { $set: { status: 'sending', claimed_at: now } },
+            { returnDocument: 'after' }
+          );
+
+          if (newsClaimRes.value) {
+            try {
+              const newsText = formatNewsMessage(newsClaimRes.value);
+              const newsMsg = await bot.telegram.sendMessage(premiumChatId, newsText, { parse_mode: 'Markdown', disable_web_page_preview: true });
+              
+              await newsCol.updateOne(
+                { _id: newsItem._id },
+                { $set: { status: 'published', published_at: new Date(), last_telegram_message_id: newsMsg.message_id } }
+              );
+              await publishCol.updateOne(
+                { _id: 'news' },
+                { $set: { last_published: new Date() } },
+                { upsert: true }
+              );
+
+              results.push({ id: newsItem._id, type: 'news', status: 'sent', channel: String(premiumChatId), message_id: newsMsg.message_id });
+            } catch (err) {
+              console.error('run-consumer error for news', newsItem._id, err && err.message ? err.message : err);
+              // Mark as failed to send, revert status
+              await newsCol.updateOne({ _id: newsItem._id, status: 'sending' }, { $set: { status: 'pending', failed_at: now } });
+              results.push({ id: newsItem._id, type: 'news', status: 'error', error: err && err.message ? err.message : String(err) });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('run-consumer news error:', err && err.message ? err.message : err);
     }
 
     try { await client.close(); } catch (e) {}
