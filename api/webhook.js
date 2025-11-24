@@ -331,24 +331,7 @@ bot.action('about', async (ctx) => {
   );
 });
 
-// Temporary helper: when a message '/get_chat_id' is posted in a channel where the bot is admin,
-// the bot will reply with the numeric chat id. This helps fetching private channel ids.
-bot.on('channel_post', async (ctx) => {
-  try {
-    const post = ctx.update.channel_post;
-    console.log('channel_post received:', post);
-    if (post && post.text && post.text.trim() === '/get_chat_id') {
-      const chatId = post.chat && post.chat.id;
-      if (chatId) {
-        // Reply in-channel with the numeric id so you can copy it into Vercel env
-        await ctx.reply(`Channel numeric id: ${chatId}`);
-        console.log('Replied with channel id', chatId);
-      }
-    }
-  } catch (err) {
-    console.error('Error handling channel_post:', err && err.message ? err.message : err);
-  }
-});
+// (diagnostic handler removed)
 
 bot.command('help', async (ctx) => {
   await ctx.reply(
