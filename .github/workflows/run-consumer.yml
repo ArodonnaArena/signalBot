@@ -1,0 +1,18 @@
+name: Run Signal Consumer
+
+on:
+  schedule:
+    - cron: '* * * * *'  # every minute
+  workflow_dispatch:     # allow manual trigger from Actions tab
+
+jobs:
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run consumer tick
+        run: |
+          curl -X POST https://signal-bot-lyart.vercel.app/api/run-consumer \
+            -H "x-admin-token: ${{ secrets.ADMIN_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+        continue-on-error: true  # don't fail the workflow if consumer fails
