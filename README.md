@@ -36,6 +36,10 @@ cp .env.example .env
 ```
 
 3. Set up database:
+
+Note: for the scheduled consumer to call your Vercel endpoint, create a GitHub Actions secret named `ADMIN_TOKEN` containing your admin token. In GitHub go to: `Settings` → `Secrets and variables` → `Actions` → `New repository secret`.
+
+The workflow `.github/workflows/run-consumer.yml` maps this secret into the job environment and uses it to authenticate the POST to `/api/run-consumer`.
 ```bash
 # Create PostgreSQL database
 createdb telegram_crypto_bot
